@@ -1,0 +1,41 @@
+---
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: fraud-features
+  namespace: fraud-detection-ml
+  labels:
+    feature-store-ui: enabled
+spec:
+  feastProject: fraud_detection
+  authz:
+    kubernetes: {}
+  services:
+    offlineStore:
+      persistence:
+        file:
+          type: duckdb
+    onlineStore:
+      persistence:
+        store:
+          type: postgres
+          secretRef:
+            name: postgres-creds
+      server:
+        envFrom:
+          - secretRef:
+              name: minio-creds
+    registry:
+      local:
+        server:
+          restAPI: true
+          envFrom:
+            - secretRef:
+                name: minio-creds
+        persistence:
+          file:
+            path: s3://feast-registry/registry.db
+    ui:
+      envFrom:
+        - secretRef:
+            name: minio-creds

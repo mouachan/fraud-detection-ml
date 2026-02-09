@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fraud-detection-ml
+  labels:
+    kubernetes.io/metadata.name: fraud-detection-ml
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: Fraud Detection ML Platform
+    openshift.io/description: Real-time transaction fraud detection

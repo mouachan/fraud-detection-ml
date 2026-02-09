@@ -1,0 +1,37 @@
+# Data files
+*.parquet
+feature_repo/data/
+
+# Feast generated
+feature_repo/feature_store.yaml
+feature_repo/.feastignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Model artifacts
+*.bin
+*.joblib
+*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets - never commit
+*secret*.yaml.local
+.env
+.env.*

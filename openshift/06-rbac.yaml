@@ -1,0 +1,68 @@
+---
+# ServiceAccount utilisé par le CronJob Feast pour exécuter
+# feast apply et feast materialize-incremental via kubectl exec.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: feast-fraud-features
+  namespace: fraud-detection-ml
+---
+# Role permettant au CronJob d'exécuter des commandes
+# dans les pods Feast via kubectl exec.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-fraud-features-cronjob
+  namespace: fraud-detection-ml
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-fraud-features-cronjob
+  namespace: fraud-detection-ml
+subjects:
+  - kind: ServiceAccount
+    name: feast-fraud-features
+    namespace: fraud-detection-ml
+roleRef:
+  kind: Role
+  name: feast-fraud-features-cronjob
+  apiGroup: rbac.authorization.k8s.io
+---
+# Role pour le Feature Store (gestion des secrets, configmaps, services)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-fraud-features
+  namespace: fraud-detection-ml
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["feast.dev"]
+    resources: ["featurestores"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-fraud-features
+  namespace: fraud-detection-ml
+subjects:
+  - kind: ServiceAccount
+    name: feast-fraud-features
+    namespace: fraud-detection-ml
+roleRef:
+  kind: Role
+  name: feast-fraud-features
+  apiGroup: rbac.authorization.k8s.io
