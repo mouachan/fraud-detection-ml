@@ -1,0 +1,174 @@
+---
+# Job qui crée les tables et insère les données de demo dans PostgreSQL.
+# Doit être exécuté après le déploiement de PostgreSQL (01-postgres.yaml).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-feast-data
+  namespace: fraud-detection-ml
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:15
+          envFrom:
+            - secretRef:
+                name: postgres-admin
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until pg_isready -h postgres.fraud-detection-ml.svc.cluster.local -U "$POSTGRES_USER"; do
+                echo "Waiting for PostgreSQL..."
+                sleep 3
+              done
+
+              PGPASSWORD="$POSTGRES_PASSWORD" psql \
+                -h postgres.fraud-detection-ml.svc.cluster.local \
+                -U "$POSTGRES_USER" \
+                -d "$POSTGRES_DB" <<'SQL'
+
+              -- ============================================================
+              -- Tables sources pour le Feature Store
+              -- ============================================================
+
+              CREATE TABLE IF NOT EXISTS customer_profiles (
+                  customer_id       VARCHAR(10) PRIMARY KEY,
+                  age               INTEGER NOT NULL,
+                  country           VARCHAR(5) NOT NULL,
+                  account_age_days  INTEGER NOT NULL,
+                  credit_limit      DOUBLE PRECISION NOT NULL,
+                  num_cards         INTEGER NOT NULL,
+                  event_timestamp   TIMESTAMP NOT NULL DEFAULT NOW(),
+                  created_timestamp TIMESTAMP NOT NULL DEFAULT NOW()
+              );
+
+              CREATE TABLE IF NOT EXISTS transaction_stats (
+                  customer_id                   VARCHAR(10) PRIMARY KEY,
+                  avg_transaction_amount_30d    DOUBLE PRECISION NOT NULL,
+                  num_transactions_7d           INTEGER NOT NULL,
+                  num_transactions_1d           INTEGER NOT NULL,
+                  max_transaction_amount_7d     DOUBLE PRECISION NOT NULL,
+                  num_foreign_transactions_30d  INTEGER NOT NULL,
+                  num_declined_transactions_7d  INTEGER NOT NULL,
+                  event_timestamp               TIMESTAMP NOT NULL DEFAULT NOW(),
+                  created_timestamp             TIMESTAMP NOT NULL DEFAULT NOW()
+              );
+
+              -- ============================================================
+              -- Données de démonstration (50 clients)
+              -- ============================================================
+
+              TRUNCATE customer_profiles, transaction_stats;
+
+              INSERT INTO customer_profiles (customer_id, age, country, account_age_days, credit_limit, num_cards) VALUES
+              ('C00001', 34, 'FR', 1200, 15000.00, 2),
+              ('C00002', 28, 'US', 450,  8000.00,  1),
+              ('C00003', 55, 'UK', 3200, 45000.00, 4),
+              ('C00004', 42, 'DE', 890,  22000.00, 2),
+              ('C00005', 23, 'ES', 60,   3000.00,  1),
+              ('C00006', 61, 'FR', 2800, 38000.00, 3),
+              ('C00007', 31, 'US', 720,  12000.00, 2),
+              ('C00008', 47, 'UK', 1500, 28000.00, 3),
+              ('C00009', 36, 'DE', 980,  18000.00, 2),
+              ('C00010', 29, 'ES', 340,  9500.00,  1),
+              ('C00011', 52, 'FR', 2400, 35000.00, 3),
+              ('C00012', 25, 'US', 180,  5000.00,  1),
+              ('C00013', 44, 'UK', 1800, 30000.00, 3),
+              ('C00014', 38, 'DE', 1100, 20000.00, 2),
+              ('C00015', 19, 'ES', 45,   2000.00,  1),
+              ('C00016', 67, 'FR', 3500, 42000.00, 4),
+              ('C00017', 33, 'US', 650,  11000.00, 2),
+              ('C00018', 41, 'UK', 1400, 25000.00, 2),
+              ('C00019', 27, 'DE', 400,  7500.00,  1),
+              ('C00020', 50, 'ES', 2100, 32000.00, 3),
+              ('C00021', 35, 'FR', 950,  16000.00, 2),
+              ('C00022', 30, 'US', 500,  9000.00,  1),
+              ('C00023', 58, 'UK', 3000, 40000.00, 4),
+              ('C00024', 43, 'DE', 1300, 23000.00, 2),
+              ('C00025', 22, 'ES', 90,   3500.00,  1),
+              ('C00026', 63, 'FR', 2900, 39000.00, 3),
+              ('C00027', 32, 'US', 680,  10500.00, 2),
+              ('C00028', 48, 'UK', 1600, 29000.00, 3),
+              ('C00029', 37, 'DE', 1050, 19000.00, 2),
+              ('C00030', 26, 'ES', 280,  6500.00,  1),
+              ('C00031', 54, 'FR', 2500, 36000.00, 3),
+              ('C00032', 24, 'US', 150,  4500.00,  1),
+              ('C00033', 45, 'UK', 1700, 27000.00, 3),
+              ('C00034', 39, 'DE', 1150, 21000.00, 2),
+              ('C00035', 20, 'ES', 55,   2500.00,  1),
+              ('C00036', 65, 'FR', 3400, 41000.00, 4),
+              ('C00037', 34, 'US', 700,  13000.00, 2),
+              ('C00038', 40, 'UK', 1350, 24000.00, 2),
+              ('C00039', 28, 'DE', 420,  8500.00,  1),
+              ('C00040', 51, 'ES', 2200, 33000.00, 3),
+              ('C00041', 46, 'FR', 1900, 31000.00, 3),
+              ('C00042', 33, 'US', 600,  10000.00, 2),
+              ('C00043', 57, 'UK', 2700, 37000.00, 4),
+              ('C00044', 36, 'DE', 850,  17000.00, 2),
+              ('C00045', 21, 'ES', 70,   2800.00,  1),
+              ('C00046', 60, 'FR', 3100, 43000.00, 4),
+              ('C00047', 29, 'US', 380,  7000.00,  1),
+              ('C00048', 49, 'UK', 1550, 26000.00, 3),
+              ('C00049', 38, 'DE', 1000, 19500.00, 2),
+              ('C00050', 53, 'ES', 2300, 34000.00, 3);
+
+              INSERT INTO transaction_stats (customer_id, avg_transaction_amount_30d, num_transactions_7d, num_transactions_1d, max_transaction_amount_7d, num_foreign_transactions_30d, num_declined_transactions_7d) VALUES
+              ('C00001', 125.50, 12, 2, 450.00,  1, 0),
+              ('C00002', 85.30,  8,  1, 320.00,  0, 0),
+              ('C00003', 340.00, 25, 4, 2800.00, 5, 1),
+              ('C00004', 210.75, 18, 3, 1200.00, 2, 0),
+              ('C00005', 45.00,  5,  1, 150.00,  0, 0),
+              ('C00006', 290.00, 22, 3, 2100.00, 4, 0),
+              ('C00007', 110.00, 10, 2, 380.00,  1, 0),
+              ('C00008', 250.00, 20, 3, 1800.00, 3, 1),
+              ('C00009', 175.50, 15, 2, 900.00,  2, 0),
+              ('C00010', 65.00,  6,  1, 220.00,  0, 0),
+              ('C00011', 310.00, 24, 4, 2500.00, 4, 1),
+              ('C00012', 55.00,  4,  0, 180.00,  0, 0),
+              ('C00013', 270.00, 21, 3, 2000.00, 3, 0),
+              ('C00014', 195.00, 16, 2, 1050.00, 2, 0),
+              ('C00015', 30.00,  3,  0, 95.00,   0, 1),
+              ('C00016', 380.00, 28, 5, 3200.00, 6, 0),
+              ('C00017', 100.00, 9,  1, 350.00,  1, 0),
+              ('C00018', 230.00, 19, 3, 1500.00, 2, 0),
+              ('C00019', 70.00,  7,  1, 250.00,  0, 0),
+              ('C00020', 285.00, 22, 3, 2200.00, 3, 1),
+              ('C00021', 140.00, 13, 2, 520.00,  1, 0),
+              ('C00022', 90.00,  8,  1, 300.00,  0, 0),
+              ('C00023', 350.00, 26, 4, 2900.00, 5, 0),
+              ('C00024', 220.00, 17, 3, 1300.00, 2, 0),
+              ('C00025', 40.00,  4,  1, 130.00,  0, 0),
+              ('C00026', 300.00, 23, 4, 2400.00, 4, 1),
+              ('C00027', 105.00, 9,  2, 360.00,  1, 0),
+              ('C00028', 260.00, 20, 3, 1900.00, 3, 0),
+              ('C00029', 180.00, 15, 2, 950.00,  2, 0),
+              ('C00030', 60.00,  5,  1, 200.00,  0, 0),
+              ('C00031', 320.00, 25, 4, 2600.00, 4, 0),
+              ('C00032', 50.00,  3,  0, 160.00,  0, 1),
+              ('C00033', 245.00, 19, 3, 1700.00, 3, 0),
+              ('C00034', 200.00, 17, 2, 1100.00, 2, 0),
+              ('C00035', 35.00,  2,  0, 110.00,  0, 0),
+              ('C00036', 370.00, 27, 5, 3100.00, 6, 1),
+              ('C00037', 115.00, 11, 2, 400.00,  1, 0),
+              ('C00038', 225.00, 18, 3, 1400.00, 2, 0),
+              ('C00039', 75.00,  7,  1, 260.00,  0, 0),
+              ('C00040', 295.00, 22, 3, 2300.00, 3, 0),
+              ('C00041', 255.00, 20, 3, 1850.00, 3, 0),
+              ('C00042', 95.00,  9,  1, 330.00,  1, 0),
+              ('C00043', 330.00, 26, 4, 2700.00, 5, 1),
+              ('C00044', 165.00, 14, 2, 850.00,  2, 0),
+              ('C00045', 38.00,  3,  0, 120.00,  0, 0),
+              ('C00046', 360.00, 27, 5, 3000.00, 5, 0),
+              ('C00047', 68.00,  6,  1, 230.00,  0, 0),
+              ('C00048', 240.00, 19, 3, 1650.00, 3, 1),
+              ('C00049', 185.00, 16, 2, 980.00,  2, 0),
+              ('C00050', 305.00, 24, 4, 2450.00, 4, 0);
+
+              SELECT 'customer_profiles: ' || COUNT(*) FROM customer_profiles;
+              SELECT 'transaction_stats: ' || COUNT(*) FROM transaction_stats;
+
+              SQL

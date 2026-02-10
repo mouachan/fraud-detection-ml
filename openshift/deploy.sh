@@ -17,37 +17,45 @@ echo "=== Fraud Detection Feature Store - Déploiement ==="
 echo ""
 
 # 1. Namespace
-echo "[1/7] Création du namespace..."
+echo "[1/8] Création du namespace..."
 oc apply -f "${SCRIPT_DIR}/00-namespace.yaml"
 
-# 2. PostgreSQL (online store)
-echo "[2/7] Déploiement de PostgreSQL..."
+# 2. PostgreSQL (offline + online store)
+echo "[2/8] Déploiement de PostgreSQL..."
 oc apply -f "${SCRIPT_DIR}/01-postgres.yaml"
 echo "  Attente du pod PostgreSQL..."
 oc rollout status deployment/postgres -n "${NAMESPACE}" --timeout=120s
 
 # 3. MinIO (registry S3)
-echo "[3/7] Déploiement de MinIO..."
+echo "[3/8] Déploiement de MinIO..."
 oc apply -f "${SCRIPT_DIR}/02-minio.yaml"
 echo "  Attente du pod MinIO..."
 oc rollout status deployment/minio -n "${NAMESPACE}" --timeout=120s
 
 # 4. Secrets
-echo "[4/7] Création des secrets..."
+echo "[4/8] Création des secrets..."
 oc apply -f "${SCRIPT_DIR}/03-secrets.yaml"
 
 # 5. Bucket MinIO
-echo "[5/7] Création du bucket feast-registry dans MinIO..."
+echo "[5/8] Création du bucket feast-registry dans MinIO..."
+oc delete job minio-create-bucket -n "${NAMESPACE}" --ignore-not-found
 oc apply -f "${SCRIPT_DIR}/04-minio-bucket-job.yaml"
 echo "  Attente de la fin du job..."
 oc wait --for=condition=complete job/minio-create-bucket -n "${NAMESPACE}" --timeout=120s
 
-# 6. RBAC
-echo "[6/7] Configuration du RBAC..."
+# 6. Données de démo dans PostgreSQL
+echo "[6/8] Chargement des données de démo dans PostgreSQL..."
+oc delete job init-feast-data -n "${NAMESPACE}" --ignore-not-found
+oc apply -f "${SCRIPT_DIR}/07-init-data-job.yaml"
+echo "  Attente de la fin du job..."
+oc wait --for=condition=complete job/init-feast-data -n "${NAMESPACE}" --timeout=120s
+
+# 7. RBAC
+echo "[7/8] Configuration du RBAC..."
 oc apply -f "${SCRIPT_DIR}/06-rbac.yaml"
 
-# 7. FeatureStore CR
-echo "[7/7] Déploiement du FeatureStore..."
+# 8. FeatureStore CR
+echo "[8/8] Déploiement du FeatureStore..."
 oc apply -f "${SCRIPT_DIR}/05-featurestore.yaml"
 
 echo ""
@@ -67,3 +75,6 @@ FEAST_UI_ROUTE=$(oc get route feast-fraud-features-ui -n "${NAMESPACE}" -o jsonp
 echo "Feature Store UI : https://${FEAST_UI_ROUTE}"
 echo ""
 echo "=== Déploiement terminé ==="
+echo ""
+echo "Prochaine étape : lancer le CronJob pour feast apply"
+echo "  oc create job --from=cronjob/feast-fraud-features feast-init -n ${NAMESPACE}"

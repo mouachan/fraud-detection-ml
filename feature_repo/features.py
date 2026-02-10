@@ -1,9 +1,11 @@
+import os
 from datetime import timedelta
 
 import pandas as pd
 from feast import Entity, FeatureView, Field, RequestSource
-from feast.data_format import ParquetFormat
-from feast.infra.offline_stores.file_source import FileSource
+from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source import (
+    PostgreSQLSource,
+)
 from feast.on_demand_feature_view import on_demand_feature_view
 from feast.types import Float64, Int64, String
 
@@ -13,25 +15,32 @@ from feast.types import Float64, Int64, String
 
 customer = Entity(
     name="customer_id",
+    join_keys=["customer_id"],
     description="Identifiant unique du client",
 )
 
 # ============================================================
-# Data Sources
+# Data Sources (PostgreSQL)
 # ============================================================
 
-customer_profile_source = FileSource(
+PG_CONN = (
+    f"host={os.getenv('POSTGRES_HOST', 'postgres.fraud-detection-ml.svc.cluster.local')} "
+    f"port={os.getenv('POSTGRES_PORT', '5432')} "
+    f"dbname={os.getenv('POSTGRES_DB', 'feast_db')} "
+    f"user={os.getenv('POSTGRES_USER', 'feast_user')} "
+    f"password={os.getenv('POSTGRES_PASSWORD', '')}"
+)
+
+customer_profile_source = PostgreSQLSource(
     name="customer_profiles",
-    path="data/customer_profiles.parquet",
-    file_format=ParquetFormat(),
+    query="SELECT * FROM customer_profiles",
     timestamp_field="event_timestamp",
     created_timestamp_column="created_timestamp",
 )
 
-transaction_stats_source = FileSource(
+transaction_stats_source = PostgreSQLSource(
     name="transaction_stats",
-    path="data/transaction_stats.parquet",
-    file_format=ParquetFormat(),
+    query="SELECT * FROM transaction_stats",
     timestamp_field="event_timestamp",
     created_timestamp_column="created_timestamp",
 )

@@ -18,8 +18,10 @@ spec:
   services:
     offlineStore:
       persistence:
-        file:
-          type: duckdb
+        store:
+          type: postgres
+          secretRef:
+            name: postgres-creds
     onlineStore:
       persistence:
         store:
