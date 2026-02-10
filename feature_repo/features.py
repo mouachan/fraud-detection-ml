@@ -2,10 +2,7 @@ import os
 from datetime import timedelta
 
 import pandas as pd
-from feast import Entity, FeatureView, Field, RequestSource
-from feast.infra.offline_stores.contrib.postgres_offline_store.postgres_source import (
-    PostgreSQLSource,
-)
+from feast import Entity, FeatureView, Field, FileSource, RequestSource
 from feast.on_demand_feature_view import on_demand_feature_view
 from feast.types import Float64, Int64, String
 
@@ -16,31 +13,29 @@ from feast.types import Float64, Int64, String
 customer = Entity(
     name="customer_id",
     join_keys=["customer_id"],
-    description="Identifiant unique du client",
+    description="Unique customer identifier",
 )
 
 # ============================================================
-# Data Sources (PostgreSQL)
+# Data Sources (Parquet on S3/MinIO)
 # ============================================================
 
-PG_CONN = (
-    f"host={os.getenv('POSTGRES_HOST', 'postgres.fraud-detection-ml.svc.cluster.local')} "
-    f"port={os.getenv('POSTGRES_PORT', '5432')} "
-    f"dbname={os.getenv('POSTGRES_DB', 'feast_db')} "
-    f"user={os.getenv('POSTGRES_USER', 'feast_user')} "
-    f"password={os.getenv('POSTGRES_PASSWORD', '')}"
+S3_ENDPOINT = os.getenv(
+    "AWS_ENDPOINT_URL", "http://minio.fraud-detection-ml.svc.cluster.local:9000"
 )
 
-customer_profile_source = PostgreSQLSource(
+customer_profile_source = FileSource(
     name="customer_profiles",
-    query="SELECT * FROM customer_profiles",
+    path="s3://feast-registry/data/customer_profiles.parquet",
+    s3_endpoint_override=S3_ENDPOINT,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_timestamp",
 )
 
-transaction_stats_source = PostgreSQLSource(
+transaction_stats_source = FileSource(
     name="transaction_stats",
-    query="SELECT * FROM transaction_stats",
+    path="s3://feast-registry/data/transaction_stats.parquet",
+    s3_endpoint_override=S3_ENDPOINT,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_timestamp",
 )

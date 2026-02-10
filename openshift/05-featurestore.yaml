@@ -14,14 +14,11 @@ spec:
       ref: main
       subPath: feature_repo
   authz:
-    kubernetes: {}
+    kubernetes:
+      roles:
+        - feast-writer
+        - feast-reader
   services:
-    offlineStore:
-      persistence:
-        store:
-          type: postgres
-          secretRef:
-            name: postgres-creds
     onlineStore:
       persistence:
         store:

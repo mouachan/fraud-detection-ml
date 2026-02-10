@@ -66,3 +66,62 @@ roleRef:
   kind: Role
   name: feast-fraud-features
   apiGroup: rbac.authorization.k8s.io
+---
+# Roles Feast RBAC pour le controle d'acces aux features
+# Ces roles sont references dans le FeatureStore CR (authz.kubernetes.roles)
+# et dans permissions.py (RoleBasedPolicy)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-writer
+  namespace: fraud-detection-ml
+rules:
+  - apiGroups: ["feast.dev"]
+    resources: ["featurestores"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-reader
+  namespace: fraud-detection-ml
+rules:
+  - apiGroups: ["feast.dev"]
+    resources: ["featurestores"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+# RoleBinding feast-writer pour le dashboard
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-writer-dashboard
+  namespace: fraud-detection-ml
+subjects:
+  - kind: ServiceAccount
+    name: rhods-dashboard
+    namespace: redhat-ods-applications
+roleRef:
+  kind: Role
+  name: feast-writer
+  apiGroup: rbac.authorization.k8s.io
+---
+# RoleBinding feast-reader pour tous les utilisateurs authentifies
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-reader-authenticated
+  namespace: fraud-detection-ml
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: feast-reader
+  apiGroup: rbac.authorization.k8s.io

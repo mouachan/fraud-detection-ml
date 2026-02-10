@@ -1,211 +1,425 @@
-# Fraud Detection avec Feature Store sur OpenShift AI 3.2
+# Fraud Detection with Feature Store on OpenShift AI 3.2
 
-Demonstration de **Feature Store** (Feast) sur **Red Hat OpenShift AI 3.2** pour un cas d'usage de detection de fraude bancaire en temps reel.
+A demonstration of **Feature Store** (Feast) on **Red Hat OpenShift AI 3.2** for real-time bank fraud detection.
 
 ## Architecture
 
 ```
                         OpenShift AI 3.2
-    ┌──────────────────────────────────────────────────┐
-    │                                                  │
-    │   ┌──────────────┐       ┌────────────────────┐  │
-    │   │  Workbench    │       │  Feature Store     │  │
-    │   │  (Notebook)   │──────▶│  (Feast Operator)  │  │
-    │   └──────────────┘       └────────┬───────────┘  │
-    │                                   │              │
-    │              ┌────────────────────┼───────────┐  │
-    │              ▼                    ▼           ▼  │
-    │   ┌────────────────┐   ┌────────────────┐  ┌──┐ │
-    │   │  Offline Store  │   │  Online Store   │  │S3│ │
-    │   │   (DuckDB)     │   │  (PostgreSQL)   │  │  │ │
-    │   │                │   │                 │  │  │ │
-    │   │  Batch /       │   │  Real-time      │  │R │ │
-    │   │  Training      │   │  Serving        │  │e │ │
-    │   └────────────────┘   └────────────────┘  │g.│ │
-    │                                            └──┘ │
-    └──────────────────────────────────────────────────┘
+    +----------------------------------------------------------+
+    |                                                          |
+    |   +-------------+        +-------------------------+     |
+    |   |  Workbench   |        |  Feature Store          |     |
+    |   |  (Notebook)  |------->|  (Feast Operator)       |     |
+    |   +-------------+        +----------+--------------+     |
+    |                                     |                    |
+    |              +----------------------+----------+         |
+    |              v                      v          v         |
+    |   +-----------------+   +-----------------+  +--------+  |
+    |   | Offline Store   |   | Online Store    |  |   S3   |  |
+    |   | (Parquet/MinIO) |   | (PostgreSQL)    |  | (MinIO)|  |
+    |   |                 |   |                 |  |Registry|  |
+    |   | Batch /         |   | Real-time       |  | + Data |  |
+    |   | Training        |   | Serving         |  |        |  |
+    |   +-----------------+   +-----------------+  +--------+  |
+    +----------------------------------------------------------+
 ```
 
-### Composants
+### Components
 
-| Composant | Technologie | Role |
-|-----------|-------------|------|
-| **Offline Store** | DuckDB | Stockage des features historiques pour le training |
-| **Online Store** | PostgreSQL 15 | Serving des features en temps reel (faible latence) |
-| **Registry** | S3 / MinIO | Catalogue des metadonnees des features |
-| **Feature Server** | Feast (RHOAI Operator) | API gRPC et REST pour servir les features |
-| **UI** | Feast UI (RHOAI) | Interface web pour explorer les features |
-| **Workbench** | Jupyter Notebook | Experimentation et entrainement du modele |
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **Offline Store** | Parquet on S3 (MinIO) | Historical feature storage for training |
+| **Online Store** | PostgreSQL 15 | Low-latency feature serving for inference |
+| **Registry** | S3 / MinIO | Feature metadata catalog (`registry.db`) |
+| **Feature Server** | Feast (RHOAI Operator) | gRPC and REST API to serve features |
+| **UI** | Feast UI (RHOAI) | Web interface to browse features |
+| **Workbench** | Jupyter Notebook | Experimentation and model training |
 
-## Prerequis
+### Why Parquet instead of PostgreSQL for the Offline Store?
 
-- Cluster OpenShift 4.14+
-- Red Hat OpenShift AI 3.2 installe
-- Feast Operator active dans le DataScienceCluster :
+The PostgreSQL offline store in Feast is a **contrib** module (not fully supported):
+
+> *"The PostgreSQL offline store does not achieve full test coverage. Please do not assume complete stability."* -- [Feast docs](https://docs.feast.dev/reference/offline-stores/postgres)
+
+Additionally, `PostgreSQLSource` is serialized as `CUSTOM_SOURCE` in the Feast protobuf, which causes the RHOAI dashboard Feature Views page to crash (`TypeError: Cannot read properties of undefined (reading 'uri')`). The dashboard expects `fileOptions.uri` which only exists on first-class data source types.
+
+Using `FileSource` (Parquet on S3) is **fully supported**, uses the `BATCH_FILE` source type with `fileOptions.uri` properly populated, and works correctly with the RHOAI dashboard.
+
+## Prerequisites
+
+- OpenShift 4.14+ cluster
+- Red Hat OpenShift AI 3.2 installed
+- Feast Operator enabled in the DataScienceCluster:
   ```yaml
   spec:
     components:
       feastoperator:
         managementState: Managed
   ```
-- CLI `oc` connecte au cluster
-- StorageClass `gp3-csi` disponible (adapter dans les YAML si different)
+- `oc` CLI connected to the cluster
+- StorageClass `gp3-csi` available (update the YAMLs if different)
 
-## Structure du projet
+## Project Structure
 
 ```
 fraud-detection-ml/
-├── README.md
-├── .gitignore
-├── openshift/                          # Manifestes de deploiement
-│   ├── 00-namespace.yaml               # Namespace avec label RHOAI
-│   ├── 01-postgres.yaml                # PostgreSQL : PVC + Deployment + Service
-│   ├── 02-minio.yaml                   # MinIO : PVC + Deployment + Service
-│   ├── 03-secrets.yaml                 # Secrets (a personnaliser)
-│   ├── 04-minio-bucket-job.yaml        # Job creation du bucket S3
-│   ├── 05-featurestore.yaml            # FeatureStore CR (Feast)
-│   ├── 06-rbac.yaml                    # ServiceAccount, Roles, RoleBindings
-│   ├── deploy.sh                       # Script de deploiement automatise
-│   └── cleanup.sh                      # Script de nettoyage
-├── feature_repo/                       # Definitions Feast
-│   ├── features.py                     # Entities, FeatureViews, On-Demand features
-│   └── data/                           # Donnees Parquet (generees par le notebook)
-└── notebooks/
-    └── fraud_detection_feature_store_demo.ipynb
++-- README.md
++-- .gitignore
++-- openshift/                             # Deployment manifests
+|   +-- 00-namespace.yaml                  # Namespace with RHOAI label
+|   +-- 01-postgres.yaml                   # PostgreSQL: PVC + Deployment + Service
+|   +-- 02-minio.yaml                      # MinIO: PVC + Deployment + Service
+|   +-- 03-secrets.yaml                    # Secrets (must be customized)
+|   +-- 04-minio-bucket-job.yaml           # Job to create the S3 bucket
+|   +-- 05-featurestore.yaml               # FeatureStore CR (Feast)
+|   +-- 06-rbac.yaml                       # ServiceAccount, Roles, RoleBindings
+|   +-- 07-init-data-job.yaml              # Job to load demo data into PostgreSQL
+|   +-- 08-parquet-data-job.yaml           # Job to upload Parquet data to MinIO
+|   +-- deploy.sh                          # Automated deployment script
+|   +-- cleanup.sh                         # Cleanup script
++-- feature_repo/                          # Feast definitions
+|   +-- features.py                        # Entities, FeatureViews, On-Demand features
+|   +-- permissions.py                     # Feast RBAC permissions
++-- notebooks/
+    +-- fraud_detection_feature_store_demo.ipynb
 ```
 
-## Deploiement
+## Deployment
 
-### 1. Configurer les secrets
+### 1. Configure secrets
 
-Avant de deployer, editez `openshift/03-secrets.yaml` et remplacez les valeurs `<CHANGEZ_MOI>` par vos propres credentials :
+Before deploying, edit `openshift/03-secrets.yaml` and replace the `<CHANGEZ_MOI>` placeholder values with your own credentials:
 
-- `postgres-admin` : mot de passe PostgreSQL
-- `postgres-creds` : connexion PostgreSQL pour Feast (le mot de passe doit correspondre)
-- `minio-admin` : identifiants MinIO
-- `minio-creds` : identifiants S3 pour Feast (doivent correspondre a minio-admin)
+- `postgres-admin`: PostgreSQL password for the deployment
+- `postgres-creds`: PostgreSQL connection for Feast (password must match `postgres-admin`)
+- `minio-admin`: MinIO credentials for the deployment
+- `minio-creds`: S3 credentials for Feast pods (must match `minio-admin`)
 
-### 2. Deployer
+### 2. Deploy
 
 ```bash
 ./openshift/deploy.sh
 ```
 
-Ce script deploie dans l'ordre :
-1. Le namespace `fraud-detection-ml` avec le label `opendatahub.io/dashboard: "true"`
-2. PostgreSQL (online store) avec volume persistant
-3. MinIO (registry S3) avec volume persistant
-4. Les secrets de connexion
-5. Un Job pour creer le bucket `feast-registry` dans MinIO
-6. Le RBAC (ServiceAccount et Roles pour le CronJob Feast)
-7. Le FeatureStore CR qui declenche le Feast Operator
+The script deploys in order:
+1. Namespace `fraud-detection-ml` with label `opendatahub.io/dashboard: "true"`
+2. PostgreSQL (online store) with persistent volume
+3. MinIO (S3 registry + offline data) with persistent volume
+4. Connection secrets
+5. Job to create the `feast-registry` bucket in MinIO
+6. Job to upload demo data as Parquet files to MinIO (`s3://feast-registry/data/`)
+7. Job to load demo data into PostgreSQL (for the online store)
+8. RBAC (ServiceAccount, Roles, and RoleBindings for Feast and dashboard)
+9. FeatureStore CR that triggers the Feast Operator
 
-### 3. Verification
+### 3. Apply features and permissions
+
+Once the FeatureStore is Ready, trigger `feast apply` to register feature definitions and RBAC permissions:
 
 ```bash
-# Verifier le status du FeatureStore
-oc get featurestore -n fraud-detection-ml
-
-# Verifier les pods
-oc get pods -n fraud-detection-ml
-
-# Verifier les conditions
-oc get featurestore fraud-features -n fraud-detection-ml \
-  -o jsonpath='{range .status.conditions[*]}{.type}: {.status} - {.message}{"\n"}{end}'
+oc create job --from=cronjob/feast-fraud-features feast-init -n fraud-detection-ml
 ```
 
-Le FeatureStore est pret quand le status est `Ready` et le pod Feast affiche `3/3 Running`.
+### 4. Verification
 
-### 4. Nettoyage
+```bash
+# Check FeatureStore status
+oc get featurestore -n fraud-detection-ml
+
+# Check pods (expect 3/3 Running for the Feast pod)
+oc get pods -n fraud-detection-ml
+
+# Check all conditions
+oc get featurestore fraud-features -n fraud-detection-ml \
+  -o jsonpath='{range .status.conditions[*]}{.type}: {.status} - {.message}{"\n"}{end}'
+
+# Verify the client ConfigMap was generated
+oc get configmap -l feast.dev/service-type=client -n fraud-detection-ml
+
+# Verify permissions are registered
+oc exec deployments/feast-fraud-features -c online -n fraud-detection-ml -- \
+  python3 -c "from feast import FeatureStore; fs = FeatureStore(repo_path='/feast-data/fraud_detection/feature_repo'); print('Permissions:', [p.name for p in fs.list_permissions()])"
+```
+
+The FeatureStore is ready when:
+- All conditions show `True`
+- The Feast pod shows `3/3 Running`
+- Permissions list returns `feast_user_permission` and `feast_admin_permission`
+
+### 5. Cleanup
 
 ```bash
 ./openshift/cleanup.sh
 ```
 
-## Utilisation du notebook
+## Feature Store RBAC
 
-### Depuis un Workbench RHOAI
+The RHOAI dashboard **requires** proper RBAC configuration to discover and display the Feature Store. Without it, the dashboard shows "No feature store repositories available". The configuration consists of **three parts** that must all be in place:
 
-1. Dans le dashboard OpenShift AI, allez dans **Projects** > `fraud-detection-ml`
-2. Creez un **Workbench** avec l'image Jupyter
-3. Configurez les variables d'environnement suivantes dans le workbench :
+### 1. Kubernetes Roles (defined in `06-rbac.yaml`)
 
-   | Variable | Description |
-   |----------|-------------|
-   | `POSTGRES_HOST` | `postgres.fraud-detection-ml.svc.cluster.local` |
-   | `POSTGRES_PORT` | `5432` |
-   | `POSTGRES_DB` | `feast_db` |
-   | `POSTGRES_USER` | `feast_user` |
-   | `POSTGRES_PASSWORD` | Votre mot de passe PostgreSQL |
-   | `AWS_ACCESS_KEY_ID` | Votre identifiant MinIO |
-   | `AWS_SECRET_ACCESS_KEY` | Votre mot de passe MinIO |
-   | `AWS_ENDPOINT_URL` | `http://minio.fraud-detection-ml.svc.cluster.local:9000` |
-   | `AWS_DEFAULT_REGION` | `us-east-1` |
+| Role | Scope | Bound To |
+|------|-------|----------|
+| `feast-writer` | Full CRUD on FeatureStore resources | Dashboard service account (`rhods-dashboard`) |
+| `feast-reader` | Read-only on FeatureStore resources | All authenticated users (`system:authenticated`) |
 
-4. Uploadez le dossier `feature_repo/` et le notebook dans le workbench
-5. Executez le notebook cellule par cellule
+```yaml
+# feast-writer: bound to the RHOAI dashboard service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-writer
+rules:
+  - apiGroups: ["feast.dev"]
+    resources: ["featurestores"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-writer-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: rhods-dashboard
+    namespace: redhat-ods-applications
+roleRef:
+  kind: Role
+  name: feast-writer
+  apiGroup: rbac.authorization.k8s.io
+```
 
-### Contenu du notebook
+```yaml
+# feast-reader: bound to all authenticated users
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: feast-reader
+rules:
+  - apiGroups: ["feast.dev"]
+    resources: ["featurestores"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-reader-authenticated
+subjects:
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: feast-reader
+  apiGroup: rbac.authorization.k8s.io
+```
 
-Le notebook `fraud_detection_feature_store_demo.ipynb` demontre le workflow complet :
+### 2. Feast Permissions (defined in `feature_repo/permissions.py`)
 
-| Etape | Description |
-|-------|-------------|
-| **1. Installation** | Installation de `feast[postgres]`, `scikit-learn` |
-| **2. Configuration** | Generation du `feature_store.yaml` depuis les variables d'environnement |
-| **3. Donnees** | Generation de 500 profils clients et statistiques de transactions |
-| **4. Definitions** | Affichage des definitions de features (`features.py`) |
-| **5. feast apply** | Enregistrement des features dans le registry S3 |
-| **6. Materialisation** | Chargement des features dans PostgreSQL (online store) |
-| **7. Training** | Recuperation des features historiques via `get_historical_features()` |
-| **8. Modele** | Entrainement d'un RandomForest + evaluation |
-| **9. Inference** | Prediction en temps reel via `get_online_features()` depuis PostgreSQL |
-| **10. Architecture** | Schema recapitulatif |
+This file maps Kubernetes roles to Feast-level actions. **It must be present in the feature repo and registered via `feast apply`.**
 
-## Features definies
+| Permission | Role | Actions |
+|------------|------|---------|
+| `feast_user_permission` | `feast-reader` | DESCRIBE, READ_ONLINE, READ_OFFLINE |
+| `feast_admin_permission` | `feast-writer` | All actions (CREATE, UPDATE, DELETE, READ, WRITE) |
+
+```python
+from feast.feast_object import ALL_RESOURCE_TYPES
+from feast.permissions.action import READ, AuthzedAction, ALL_ACTIONS
+from feast.permissions.permission import Permission
+from feast.permissions.policy import RoleBasedPolicy
+
+admin_roles = ["feast-writer"]
+user_roles = ["feast-reader"]
+
+feast_user_permission = Permission(
+    name="feast_user_permission",
+    types=ALL_RESOURCE_TYPES,
+    policy=RoleBasedPolicy(roles=user_roles),
+    actions=[AuthzedAction.DESCRIBE] + READ,
+)
+
+feast_admin_permission = Permission(
+    name="feast_admin_permission",
+    types=ALL_RESOURCE_TYPES,
+    policy=RoleBasedPolicy(roles=admin_roles),
+    actions=ALL_ACTIONS,
+)
+```
+
+### 3. FeatureStore CR references the roles
+
+The `authz` section in the FeatureStore CR (`05-featurestore.yaml`) must list the Kubernetes roles:
+
+```yaml
+spec:
+  authz:
+    kubernetes:
+      roles:
+        - feast-writer
+        - feast-reader
+```
+
+> **Important**: All three parts are required. Missing any one of them (Kubernetes roles, `permissions.py`, or `authz` in the CR) will cause the dashboard to not display the Feature Store.
+
+## FeatureStore CR
+
+The FeatureStore CR (`05-featurestore.yaml`) configures the Feast deployment:
+
+```yaml
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: fraud-features
+  namespace: fraud-detection-ml
+  labels:
+    feature-store-ui: enabled
+spec:
+  feastProject: fraud_detection
+  feastProjectDir:
+    git:
+      url: https://github.com/mouachan/fraud-detection-ml
+      ref: main
+      subPath: feature_repo
+  authz:
+    kubernetes:
+      roles:
+        - feast-writer
+        - feast-reader
+  services:
+    onlineStore:
+      persistence:
+        store:
+          type: postgres
+          secretRef:
+            name: postgres-creds
+      server:
+        envFrom:
+          - secretRef:
+              name: minio-creds
+    registry:
+      local:
+        server:
+          restAPI: true
+          envFrom:
+            - secretRef:
+                name: minio-creds
+        persistence:
+          file:
+            path: s3://feast-registry/registry.db
+    ui:
+      envFrom:
+        - secretRef:
+            name: minio-creds
+```
+
+Key points:
+- **No `offlineStore` section**: the default file-based (Dask) offline store is used, reading Parquet files from S3
+- **`feastProjectDir.git`**: the operator clones `features.py` and `permissions.py` from this Git repo
+- **`envFrom` on all containers**: MinIO/S3 credentials are injected into the registry, online store, and UI containers
+- **`restAPI: true`**: enables the REST API on the registry for the dashboard
+
+## TLS
+
+TLS is **automatically provisioned** by the Feast Operator using OpenShift service-serving certificates. All Feast services (online store, registry, UI) listen on port 443 with TLS enabled. The operator creates:
+
+- TLS secrets for each service (`feast-fraud-features-online-tls`, `feast-fraud-features-registry-tls`, `feast-fraud-features-ui-tls`)
+- A client CA ConfigMap (`feast-fraud-features-client-ca`) with the service-serving CA certificate
+- A client configuration ConfigMap (`feast-fraud-features-client`) with the `feature_store.yaml` pointing to HTTPS endpoints
+
+Clients (workbenches, notebooks) must mount the CA certificate to connect to the Feast servers.
+
+## Using the Notebook
+
+### From an RHOAI Workbench
+
+1. In the OpenShift AI dashboard, go to **Projects** > `fraud-detection-ml`
+2. Create a **Workbench** with a Jupyter image
+3. When creating the workbench, select the `fraud-detection` **Feature Store** in the configuration (this auto-mounts the Feast client config and CA certificate)
+4. Upload the `feature_repo/` folder and the notebook to the workbench
+5. Run the notebook cell by cell
+
+### Notebook Contents
+
+The notebook `fraud_detection_feature_store_demo.ipynb` demonstrates the full workflow:
+
+| Step | Description |
+|------|-------------|
+| **1. Setup** | Install `feast[postgres]`, `scikit-learn` |
+| **2. Configuration** | Generate `feature_store.yaml` from environment variables |
+| **3. Data** | Generate customer profiles and transaction statistics |
+| **4. Definitions** | Display feature definitions (`features.py`) |
+| **5. feast apply** | Register features in the S3 registry |
+| **6. Materialization** | Load features into PostgreSQL (online store) |
+| **7. Training** | Retrieve historical features via `get_historical_features()` |
+| **8. Model** | Train a RandomForest classifier + evaluation |
+| **9. Inference** | Real-time prediction via `get_online_features()` from PostgreSQL |
+| **10. Architecture** | Summary diagram |
+
+## Feature Definitions
 
 ### Entity
 
-- **customer_id** : identifiant unique du client
+- **customer_id**: unique customer identifier
+
+### Data Sources
+
+Data sources are **Parquet files stored on MinIO (S3)**. The `FileSource` is a fully-supported Feast data source type (`BATCH_FILE`) that requires `s3_endpoint_override` to point to MinIO instead of AWS S3:
+
+```python
+customer_profile_source = FileSource(
+    name="customer_profiles",
+    path="s3://feast-registry/data/customer_profiles.parquet",
+    s3_endpoint_override=S3_ENDPOINT,
+    timestamp_field="event_timestamp",
+    created_timestamp_column="created_timestamp",
+)
+```
 
 ### Feature Views
 
-**customer_profile** (TTL: 365 jours)
+**customer_profile** (TTL: 365 days) - Source: `s3://feast-registry/data/customer_profiles.parquet`
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `age` | INT64 | Age du client |
-| `country` | STRING | Pays du client |
-| `account_age_days` | INT64 | Anciennete du compte en jours |
-| `credit_limit` | FLOAT64 | Limite de credit |
-| `num_cards` | INT64 | Nombre de cartes bancaires |
+| `age` | INT64 | Customer age |
+| `country` | STRING | Customer country code |
+| `account_age_days` | INT64 | Account age in days |
+| `credit_limit` | FLOAT64 | Credit limit |
+| `num_cards` | INT64 | Number of bank cards |
 
-**transaction_stats** (TTL: 30 jours)
+**transaction_stats** (TTL: 30 days) - Source: `s3://feast-registry/data/transaction_stats.parquet`
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `avg_transaction_amount_30d` | FLOAT64 | Montant moyen des transactions sur 30 jours |
-| `num_transactions_7d` | INT64 | Nombre de transactions sur 7 jours |
-| `num_transactions_1d` | INT64 | Nombre de transactions sur 1 jour |
-| `max_transaction_amount_7d` | FLOAT64 | Montant max sur 7 jours |
-| `num_foreign_transactions_30d` | INT64 | Transactions a l'etranger sur 30 jours |
-| `num_declined_transactions_7d` | INT64 | Transactions refusees sur 7 jours |
+| `avg_transaction_amount_30d` | FLOAT64 | Average transaction amount over 30 days |
+| `num_transactions_7d` | INT64 | Number of transactions over 7 days |
+| `num_transactions_1d` | INT64 | Number of transactions over 1 day |
+| `max_transaction_amount_7d` | FLOAT64 | Maximum transaction amount over 7 days |
+| `num_foreign_transactions_30d` | INT64 | Foreign transactions over 30 days |
+| `num_declined_transactions_7d` | INT64 | Declined transactions over 7 days |
 
 ### On-Demand Feature View
 
-**fraud_risk_features** (calcule en temps reel a chaque requete)
+**fraud_risk_features** (computed in real-time at each request)
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `amount_ratio_to_avg` | FLOAT64 | Ratio montant / moyenne 30j |
-| `amount_ratio_to_max` | FLOAT64 | Ratio montant / max 7j |
-| `risk_score` | FLOAT64 | Score de risque composite |
+| `amount_ratio_to_avg` | FLOAT64 | Transaction amount / 30-day average ratio |
+| `amount_ratio_to_max` | FLOAT64 | Transaction amount / 7-day max ratio |
+| `risk_score` | FLOAT64 | Composite risk score (weighted: amount ratio 40%, foreign transaction 30%, declined ratio 30%) |
 
-## Points cles de la configuration
+## Configuration Details
 
-### Format du secret PostgreSQL pour Feast
+### PostgreSQL Secret Format for Feast
 
-Le Feast Operator attend un secret avec une **cle unique** nommee d'apres le type de store (ici `postgres`), contenant la configuration au format YAML :
+The Feast Operator expects a secret with a **single key** named after the store type (`postgres`), containing YAML-formatted connection config:
 
 ```yaml
 apiVersion: v1
@@ -217,15 +431,29 @@ stringData:
     host: postgres.fraud-detection-ml.svc.cluster.local
     port: 5432
     user: feast_user
-    password: mon_mot_de_passe
+    password: your_password
     database: feast_db
 ```
 
-> **Attention** : un secret avec des cles separees (`host`, `port`, `user`, `password`) ne fonctionnera pas.
+> **Warning**: A secret with separate keys (`host`, `port`, `user`, `password`) will not work. The Feast Operator requires a single `postgres` key with YAML content.
 
-### Credentials S3/MinIO
+### S3/MinIO Credentials
 
-Les pods Feast ont besoin des variables d'environnement AWS pour acceder au registry S3 sur MinIO. Elles sont injectees via `envFrom` dans le FeatureStore CR sur les **trois containers** (registry, online, ui) :
+Feast pods need AWS environment variables to access MinIO. The `minio-creds` secret must contain:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds
+stringData:
+  AWS_ACCESS_KEY_ID: your_access_key
+  AWS_SECRET_ACCESS_KEY: your_secret_key
+  AWS_ENDPOINT_URL: http://minio.fraud-detection-ml.svc.cluster.local:9000
+  AWS_DEFAULT_REGION: us-east-1
+```
+
+These variables are injected via `envFrom` in the FeatureStore CR on **all three containers** (registry, online, ui):
 
 ```yaml
 services:
@@ -246,45 +474,100 @@ services:
           name: minio-creds
 ```
 
+### Parquet Data Files
+
+The demo data is generated and uploaded to MinIO as Parquet files by the `08-parquet-data-job.yaml` Job. String columns are explicitly cast to `pa.string()` (instead of `pa.large_string()`) for compatibility with Feast 0.58.0, which does not support the `large_string` Arrow type.
+
+The files are stored at:
+- `s3://feast-registry/data/customer_profiles.parquet` (50 rows)
+- `s3://feast-registry/data/transaction_stats.parquet` (50 rows)
+
 ### StorageClass
 
-Les PVC utilisent `gp3-csi` (AWS EBS). Pour un autre provider, modifiez le champ `storageClassName` dans les fichiers `01-postgres.yaml` et `02-minio.yaml`.
+The PVCs use `gp3-csi` (AWS EBS). For a different provider, update the `storageClassName` field in `01-postgres.yaml` and `02-minio.yaml`.
 
 ## Troubleshooting
 
-### Le FeatureStore reste en Failed
+### FeatureStore stays in Failed state
 
 ```bash
-# Verifier le message d'erreur
+# Check the error message
 oc get featurestore fraud-features -n fraud-detection-ml \
   -o jsonpath='{.status.conditions[?(@.type=="FeatureStore")].message}'
 ```
 
-**Erreur** : `secret key postgres doesn't exist in secret postgres-creds`
-- Le secret `postgres-creds` doit contenir une cle unique `postgres` (pas des cles separees)
+**Error**: `secret key postgres doesn't exist in secret postgres-creds`
+- The `postgres-creds` secret must contain a single key `postgres` (not separate keys)
 
-### Le pod Feast est en CrashLoopBackOff
+### Feast pod is in CrashLoopBackOff
 
 ```bash
-# Verifier les logs
+# Check the logs
 oc logs -l feast.dev/name=fraud-features -n fraud-detection-ml --all-containers --tail=30
 ```
 
-**Erreur** : `NoCredentialsError: Unable to locate credentials`
-- Les variables AWS ne sont pas injectees. Verifiez que `envFrom` est configure sur les 3 containers dans le FeatureStore CR.
+**Error**: `NoCredentialsError: Unable to locate credentials`
+- AWS variables are not injected. Verify that `envFrom` is configured on all 3 containers in the FeatureStore CR.
 
-**Erreur** : `S3RegistryBucketNotExist: S3 bucket feast-registry does not exist`
-- Le bucket n'a pas ete cree dans MinIO. Relancez le Job : `oc delete job minio-create-bucket -n fraud-detection-ml && oc apply -f openshift/04-minio-bucket-job.yaml`
+**Error**: `S3RegistryBucketNotExist: S3 bucket feast-registry does not exist`
+- The bucket was not created in MinIO. Re-run the Job:
+  ```bash
+  oc delete job minio-create-bucket -n fraud-detection-ml
+  oc apply -f openshift/04-minio-bucket-job.yaml
+  ```
 
-### Le dashboard RHOAI ne montre pas le Feature Store
+### RHOAI Dashboard does not show the Feature Store
 
-- Verifiez le label sur le FeatureStore CR : `oc get featurestore fraud-features -n fraud-detection-ml -o jsonpath='{.metadata.labels}'`
-- Le label `feature-store-ui: enabled` doit etre present.
-- Verifiez le label sur le namespace : `opendatahub.io/dashboard: "true"`
+The dashboard requires **all three RBAC components** to display the Feature Store:
+
+1. Verify the `permissions.py` file is present in the feature repo and `feast apply` has been run:
+   ```bash
+   oc exec deployments/feast-fraud-features -c online -n fraud-detection-ml -- \
+     python3 -c "from feast import FeatureStore; fs = FeatureStore(repo_path='/feast-data/fraud_detection/feature_repo'); print([p.name for p in fs.list_permissions()])"
+   ```
+   Expected: `['feast_user_permission', 'feast_admin_permission']`
+
+2. Verify the Feast RBAC roles exist and are bound:
+   ```bash
+   oc get roles feast-writer feast-reader -n fraud-detection-ml
+   oc get rolebinding feast-writer-dashboard feast-reader-authenticated -n fraud-detection-ml
+   ```
+
+3. Verify the FeatureStore CR has RBAC roles configured:
+   ```bash
+   oc get featurestore fraud-features -n fraud-detection-ml \
+     -o jsonpath='{.spec.authz}'
+   ```
+   Expected: `{"kubernetes":{"roles":["feast-writer","feast-reader"]}}`
+
+4. Verify the namespace label:
+   ```bash
+   oc get namespace fraud-detection-ml --show-labels | grep opendatahub
+   ```
+   Expected: `opendatahub.io/dashboard=true`
+
+5. Check dashboard logs for errors:
+   ```bash
+   oc logs -l app=rhods-dashboard -n redhat-ods-applications --tail=100 | grep -i feature
+   ```
+
+### Feature Views page shows a TypeError
+
+**Error**: `TypeError: Cannot read properties of undefined (reading 'uri')`
+
+This happens when data sources use `PostgreSQLSource` (contrib), which is serialized as `CUSTOM_SOURCE` in the Feast protobuf. The dashboard expects `fileOptions.uri` which doesn't exist on custom sources.
+
+**Fix**: Use `FileSource` (Parquet on S3) instead of `PostgreSQLSource`. See the [Why Parquet?](#why-parquet-instead-of-postgresql-for-the-offline-store) section.
+
+### feast apply fails with `KeyError: 'large_string'`
+
+Feast 0.58.0 doesn't support the `large_string` Arrow type. Ensure Parquet files are written with `pa.string()` columns. The `08-parquet-data-job.yaml` handles this automatically by casting `large_string` to `string` before writing.
 
 ## References
 
 - [Red Hat OpenShift AI 3.2 - Working with machine learning features](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.2/html/working_with_machine_learning_features/)
 - [Feast documentation](https://docs.feast.dev/)
+- [Feast Operator RBAC with TLS example](https://github.com/feast-dev/feast/tree/master/examples/operator-rbac-openshift-tls)
 - [Feast Operator samples](https://github.com/feast-dev/feast/tree/stable/infra/feast-operator)
-- [Feast Credit Score Tutorial](https://github.com/feast-dev/feast-credit-score-local-tutorial)
+- [Feast PostgreSQL offline store limitations](https://docs.feast.dev/reference/offline-stores/postgres)
+- [Feast FileSource documentation](https://docs.feast.dev/reference/data-sources/file)
