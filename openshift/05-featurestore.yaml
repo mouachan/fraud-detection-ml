@@ -8,6 +8,11 @@ metadata:
     feature-store-ui: enabled
 spec:
   feastProject: fraud_detection
+  feastProjectDir:
+    git:
+      url: https://github.com/mouachan/fraud-detection-ml
+      ref: main
+      subPath: feature_repo
   authz:
     kubernetes: {}
   services:
