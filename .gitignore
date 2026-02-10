@@ -1,6 +1,5 @@
-# Data files
-*.parquet
-feature_repo/data/
+# Data files (keep sample data in feature_repo/data/ for feast apply schema inference)
+# *.parquet
 
 # Feast generated
 feature_repo/feature_store.yaml
