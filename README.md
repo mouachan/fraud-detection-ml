@@ -68,16 +68,21 @@ fraud-detection-ml/
 +-- .gitignore
 +-- openshift/                             # Deployment manifests
 |   +-- 00-namespace.yaml                  # Namespace with RHOAI label
-|   +-- 01-postgres.yaml                   # PostgreSQL: PVC + Deployment + Service
-|   +-- 02-minio.yaml                      # MinIO: PVC + Deployment + Service
-|   +-- 03-secrets.yaml                    # Secrets (must be customized)
+|   +-- 01-secrets.yaml                    # Secrets (must be customized)
+|   +-- 02-rbac.yaml                       # ServiceAccount, Roles, RoleBindings
+|   +-- 03-minio.yaml                      # MinIO: PVC + Deployment + Service
 |   +-- 04-minio-bucket-job.yaml           # Job to create the S3 bucket
-|   +-- 05-featurestore.yaml               # FeatureStore CR (Feast)
-|   +-- 06-rbac.yaml                       # ServiceAccount, Roles, RoleBindings
-|   +-- 07-init-data-job.yaml              # Job to load demo data into PostgreSQL
+|   +-- 05-postgres.yaml                   # PostgreSQL: PVC + Deployment + Service
+|   +-- 06-init-data-job.yaml              # Job to load demo data into PostgreSQL
+|   +-- 07-featurestore.yaml               # FeatureStore CR (Feast)
 |   +-- 08-parquet-data-job.yaml           # Job to upload Parquet data to MinIO
-|   +-- deploy.sh                          # Automated deployment script
+|   +-- deploy.sh                          # Automated deployment script (10 steps)
+|   +-- feast-init.sh                      # s3fs workaround + feast apply + materialize
 |   +-- cleanup.sh                         # Cleanup script
++-- helm/fraud-detection-feast/            # Helm chart (alternative deployment)
+|   +-- Chart.yaml
+|   +-- values.yaml
+|   +-- templates/
 +-- feature_repo/                          # Feast definitions
 |   +-- features.py                        # Entities, FeatureViews, On-Demand features
 |   +-- permissions.py                     # Feast RBAC permissions
@@ -89,7 +94,7 @@ fraud-detection-ml/
 
 ### 1. Configure secrets
 
-Before deploying, edit `openshift/03-secrets.yaml` and replace the `<CHANGEZ_MOI>` placeholder values with your own credentials:
+Before deploying, edit `openshift/01-secrets.yaml` and replace the `<CHANGEZ_MOI>` placeholder values with your own credentials:
 
 - `postgres-admin`: PostgreSQL password for the deployment
 - `postgres-creds`: PostgreSQL connection for Feast (password must match `postgres-admin`)
@@ -104,21 +109,87 @@ Before deploying, edit `openshift/03-secrets.yaml` and replace the `<CHANGEZ_MOI
 
 The script deploys in order:
 1. Namespace `fraud-detection-ml` with label `opendatahub.io/dashboard: "true"`
-2. PostgreSQL (online store) with persistent volume
-3. MinIO (S3 registry + offline data) with persistent volume
-4. Connection secrets
+2. Connection secrets
+3. RBAC (ServiceAccount, Roles, and RoleBindings for Feast and dashboard)
+4. MinIO (S3 registry + offline data) with persistent volume
 5. Job to create the `feast-registry` bucket in MinIO
-6. Job to upload demo data as Parquet files to MinIO (`s3://feast-registry/data/`)
+6. PostgreSQL (online store) with persistent volume
 7. Job to load demo data into PostgreSQL (for the online store)
-8. RBAC (ServiceAccount, Roles, and RoleBindings for Feast and dashboard)
-9. FeatureStore CR that triggers the Feast Operator
+8. FeatureStore CR that triggers the Feast Operator
+9. Job to upload demo data as Parquet files to MinIO (`s3://feast-registry/data/`)
+10. s3fs workaround + `feast apply` + `feast materialize-incremental` (see [s3fs workaround](#s3fs-workaround) below)
 
-### 3. Apply features and permissions
+### Deployment with Helm
 
-Once the FeatureStore is Ready, trigger `feast apply` to register feature definitions and RBAC permissions:
+As an alternative to the manual deployment, you can use the provided Helm chart:
 
 ```bash
-oc create job --from=cronjob/feast-fraud-features feast-init -n fraud-detection-ml
+# Deploy with default values
+helm install fraud-feast helm/fraud-detection-feast/
+
+# Deploy with custom values
+helm install fraud-feast helm/fraud-detection-feast/ \
+  --set postgres.password=mypassword \
+  --set minio.rootUser=myadmin \
+  --set minio.rootPassword=mysecret \
+  --set storageClassName=gp3-csi
+
+# Or with a values file
+helm install fraud-feast helm/fraud-detection-feast/ -f my-values.yaml
+```
+
+Configurable parameters (`values.yaml`):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `namespace` | `fraud-detection-ml` | OpenShift namespace |
+| `storageClassName` | `gp3-csi` | StorageClass for PVCs |
+| `postgres.password` | `changeme` | PostgreSQL password |
+| `postgres.database` | `feast_db` | Database name |
+| `postgres.user` | `feast_user` | PostgreSQL user |
+| `postgres.storageSize` | `10Gi` | PostgreSQL PVC size |
+| `minio.rootUser` | `minio` | MinIO admin user |
+| `minio.rootPassword` | `minio123` | MinIO admin password |
+| `minio.storageSize` | `10Gi` | MinIO PVC size |
+| `minio.bucketName` | `feast-registry` | S3 bucket name |
+| `featureStore.gitUrl` | `https://github.com/mouachan/fraud-detection-ml` | Git repo URL |
+| `featureStore.gitRef` | `main` | Git branch |
+| `featureStore.subPath` | `feature_repo` | Sub-directory in the repo |
+| `feastInit.enabled` | `false` | Enable s3fs workaround Job (see note below) |
+
+After `helm install` completes, run the s3fs workaround script manually:
+
+```bash
+./openshift/feast-init.sh
+```
+
+To uninstall:
+
+```bash
+helm uninstall fraud-feast
+oc delete namespace fraud-detection-ml
+```
+
+### 3. s3fs workaround
+
+The RHOAI 3.2 Feast image (`odh-feature-server-rhel9`) does not include the `s3fs` Python package, which causes `feast materialize-incremental` to fail when using Parquet files on S3/MinIO. The workaround installs `s3fs` into `/tmp/pip` inside the Feast pod and sets `PYTHONPATH` accordingly.
+
+When using `deploy.sh`, this is handled automatically in step 10. When using Helm, run the script after `helm install`:
+
+```bash
+./openshift/feast-init.sh
+```
+
+The script:
+1. Waits for the Feast pod to be ready
+2. Installs `s3fs` in `/tmp/pip` (workaround for the missing package)
+3. Runs `feast apply` to register feature definitions and RBAC permissions
+4. Runs `feast materialize-incremental` to load features into the PostgreSQL online store
+
+You can also pass a custom namespace:
+
+```bash
+./openshift/feast-init.sh my-namespace
 ```
 
 ### 4. Verification
@@ -157,7 +228,7 @@ The FeatureStore is ready when:
 
 The RHOAI dashboard **requires** proper RBAC configuration to discover and display the Feature Store. Without it, the dashboard shows "No feature store repositories available". The configuration consists of **three parts** that must all be in place:
 
-### 1. Kubernetes Roles (defined in `06-rbac.yaml`)
+### 1. Kubernetes Roles (defined in `02-rbac.yaml`)
 
 | Role | Scope | Bound To |
 |------|-------|----------|
@@ -255,7 +326,7 @@ feast_admin_permission = Permission(
 
 ### 3. FeatureStore CR references the roles
 
-The `authz` section in the FeatureStore CR (`05-featurestore.yaml`) must list the Kubernetes roles:
+The `authz` section in the FeatureStore CR (`07-featurestore.yaml`) must list the Kubernetes roles:
 
 ```yaml
 spec:
@@ -270,7 +341,7 @@ spec:
 
 ## FeatureStore CR
 
-The FeatureStore CR (`05-featurestore.yaml`) configures the Feast deployment:
+The FeatureStore CR (`07-featurestore.yaml`) configures the Feast deployment:
 
 ```yaml
 apiVersion: feast.dev/v1alpha1
@@ -484,7 +555,7 @@ The files are stored at:
 
 ### StorageClass
 
-The PVCs use `gp3-csi` (AWS EBS). For a different provider, update the `storageClassName` field in `01-postgres.yaml` and `02-minio.yaml`.
+The PVCs use `gp3-csi` (AWS EBS). For a different provider, update the `storageClassName` field in `05-postgres.yaml` and `03-minio.yaml`.
 
 ## Troubleshooting
 
