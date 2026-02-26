@@ -125,3 +125,19 @@ roleRef:
   kind: Role
   name: feast-reader
   apiGroup: rbac.authorization.k8s.io
+---
+# RoleBinding feast-reader pour tous les ServiceAccounts du namespace
+# (necessaire car Feast RBAC resout les roles par SA, pas par groupe)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: feast-reader-namespace-sa
+  namespace: fraud-detection-ml
+subjects:
+  - kind: Group
+    name: system:serviceaccounts:fraud-detection-ml
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: feast-reader
+  apiGroup: rbac.authorization.k8s.io
