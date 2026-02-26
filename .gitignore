@@ -32,5 +32,6 @@ Thumbs.db
 
 # Secrets - never commit
 *secret*.yaml.local
+values-local.yaml
 .env
 .env.*

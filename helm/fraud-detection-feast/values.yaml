@@ -1,0 +1,22 @@
+namespace: fraud-detection-ml
+storageClassName: gp3-csi
+
+postgres:
+  password: changeme
+  database: feast_db
+  user: feast_user
+  storageSize: 10Gi
+
+minio:
+  rootUser: minio
+  rootPassword: minio123
+  storageSize: 10Gi
+  bucketName: feast-registry
+
+featureStore:
+  gitUrl: https://github.com/mouachan/fraud-detection-ml
+  gitRef: main
+  subPath: feature_repo
+
+feastInit:
+  enabled: false

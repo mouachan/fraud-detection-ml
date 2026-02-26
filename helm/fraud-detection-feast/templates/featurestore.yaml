@@ -1,0 +1,45 @@
+apiVersion: feast.dev/v1alpha1
+kind: FeatureStore
+metadata:
+  name: fraud-features
+  namespace: {{ include "fraud-detection-feast.namespace" . }}
+  labels:
+    {{- include "fraud-detection-feast.labels" . | nindent 4 }}
+    feature-store-ui: enabled
+spec:
+  feastProject: fraud_detection
+  feastProjectDir:
+    git:
+      url: {{ .Values.featureStore.gitUrl }}
+      ref: {{ .Values.featureStore.gitRef }}
+      subPath: {{ .Values.featureStore.subPath }}
+  authz:
+    kubernetes:
+      roles:
+        - feast-writer
+        - feast-reader
+  services:
+    onlineStore:
+      persistence:
+        store:
+          type: postgres
+          secretRef:
+            name: postgres-creds
+      server:
+        envFrom:
+          - secretRef:
+              name: minio-creds
+    registry:
+      local:
+        server:
+          restAPI: true
+          envFrom:
+            - secretRef:
+                name: minio-creds
+        persistence:
+          file:
+            path: s3://{{ .Values.minio.bucketName }}/registry.db
+    ui:
+      envFrom:
+        - secretRef:
+            name: minio-creds

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: fraud-detection-feast
+description: Fraud Detection Feature Store on Red Hat OpenShift AI 3.2
+type: application
+version: 0.1.0
+appVersion: "0.58.0"
+keywords:
+  - feast
+  - feature-store
+  - fraud-detection
+  - openshift-ai
+  - rhoai

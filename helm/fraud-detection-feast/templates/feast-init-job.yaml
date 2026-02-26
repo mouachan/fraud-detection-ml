@@ -1,0 +1,59 @@
+{{- if .Values.feastInit.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: feast-init
+  namespace: {{ include "fraud-detection-feast.namespace" . }}
+  labels:
+    {{- include "fraud-detection-feast.labels" . | nindent 4 }}
+
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      serviceAccountName: feast-fraud-features
+      restartPolicy: OnFailure
+      containers:
+        - name: feast-init
+          image: registry.redhat.io/openshift4/ose-cli:latest
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # Attendre que le pod Feast soit Ready
+              echo "Attente du pod Feast..."
+              for i in $(seq 1 60); do
+                FEAST_POD=$(oc get pod -l feast.dev/name=fraud-features -n {{ include "fraud-detection-feast.namespace" . }} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+                if [ -n "$FEAST_POD" ]; then
+                  READY=$(oc get pod "$FEAST_POD" -n {{ include "fraud-detection-feast.namespace" . }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+                  if [ "$READY" = "True" ]; then
+                    echo "Pod Feast ready: $FEAST_POD"
+                    break
+                  fi
+                fi
+                echo "  Attente... ($i/60)"
+                sleep 10
+              done
+
+              if [ -z "$FEAST_POD" ] || [ "$READY" != "True" ]; then
+                echo "ERREUR: Le pod Feast n'est pas ready apres le timeout"
+                exit 1
+              fi
+
+              # Workaround s3fs : l'image odh-feature-server-rhel9 ne contient pas s3fs
+              echo "Installation de s3fs dans /tmp/pip..."
+              oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- \
+                bash -c "pip install --target=/tmp/pip s3fs 2>&1 | tail -1"
+
+              # feast apply
+              echo "Execution de feast apply..."
+              oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- \
+                bash -c "PYTHONPATH=/tmp/pip feast -c /feast-data/fraud_detection/feature_repo apply"
+
+              # feast materialize-incremental
+              echo "Execution de feast materialize-incremental..."
+              oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- \
+                bash -c "PYTHONPATH=/tmp/pip feast -c /feast-data/fraud_detection/feature_repo materialize-incremental \$(date -u +%Y-%m-%dT%H:%M:%S)"
+
+              echo "Feast initialisation terminee."
+{{- end }}

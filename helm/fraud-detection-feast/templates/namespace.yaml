@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "fraud-detection-feast.namespace" . }}
+  labels:
+    {{- include "fraud-detection-feast.labels" . | nindent 4 }}
+    kubernetes.io/metadata.name: {{ include "fraud-detection-feast.namespace" . }}
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: Fraud Detection ML Platform
+    openshift.io/description: Real-time transaction fraud detection

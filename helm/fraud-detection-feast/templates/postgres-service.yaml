@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ include "fraud-detection-feast.namespace" . }}
+  labels:
+    {{- include "fraud-detection-feast.labels" . | nindent 4 }}
+    app: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

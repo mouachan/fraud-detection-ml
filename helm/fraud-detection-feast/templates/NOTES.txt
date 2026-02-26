@@ -1,0 +1,23 @@
+Fraud Detection Feature Store deployed in namespace: {{ include "fraud-detection-feast.namespace" . }}
+
+Verification:
+
+  oc get featurestore -n {{ include "fraud-detection-feast.namespace" . }}
+  oc get pods -n {{ include "fraud-detection-feast.namespace" . }}
+
+Feature Store UI:
+
+  oc get route feast-fraud-features-ui -n {{ include "fraud-detection-feast.namespace" . }} -o jsonpath='https://{.spec.host}'
+
+{{- if .Values.feastInit.enabled }}
+
+Le workaround s3fs et l'initialisation Feast (apply + materialize) sont executes automatiquement par le Job feast-init.
+{{- else }}
+
+IMPORTANT: feastInit est desactive. Vous devez executer manuellement:
+
+  FEAST_POD=$(oc get pod -l feast.dev/name=fraud-features -n {{ include "fraud-detection-feast.namespace" . }} -o jsonpath='{.items[0].metadata.name}')
+  oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- bash -c "pip install --target=/tmp/pip s3fs"
+  oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- bash -c "PYTHONPATH=/tmp/pip feast -c /feast-data/fraud_detection/feature_repo apply"
+  oc exec "$FEAST_POD" -c online -n {{ include "fraud-detection-feast.namespace" . }} -- bash -c "PYTHONPATH=/tmp/pip feast -c /feast-data/fraud_detection/feature_repo materialize-incremental $(date -u +%Y-%m-%dT%H:%M:%S)"
+{{- end }}

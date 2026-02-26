@@ -1,11 +1,11 @@
----
-# Job qui crée le bucket "feast-registry" dans MinIO.
-# Doit être exécuté après le déploiement de MinIO.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: minio-create-bucket
-  namespace: fraud-detection-ml
+  namespace: {{ include "fraud-detection-feast.namespace" . }}
+  labels:
+    {{- include "fraud-detection-feast.labels" . | nindent 4 }}
+
 spec:
   backoffLimit: 4
   template:
@@ -25,9 +25,9 @@ spec:
             - -c
             - |
               echo "Waiting for MinIO to be ready..."
-              until mc alias set local http://minio.fraud-detection-ml.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+              until mc alias set local http://minio.{{ include "fraud-detection-feast.namespace" . }}.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
                 sleep 5
               done
-              echo "Creating feast-registry bucket..."
-              mc mb --ignore-existing local/feast-registry
+              echo "Creating {{ .Values.minio.bucketName }} bucket..."
+              mc mb --ignore-existing local/{{ .Values.minio.bucketName }}
               echo "Bucket created successfully"
