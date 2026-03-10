@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir \
     skl2onnx \
     onnxruntime \
     model-registry \
-    boto3
+    boto3 \
+    mlflow
 
 USER 1001
 

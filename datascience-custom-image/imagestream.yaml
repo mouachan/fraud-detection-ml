@@ -4,16 +4,12 @@ metadata:
   name: fraud-detection-datascience
   namespace: redhat-ods-applications
   labels:
-    app.kubernetes.io/created-by: fraud-detection-ml
-    app.kubernetes.io/part-of: workbenches
-    app.opendatahub.io/workbenches: "true"
-    component.opendatahub.io/name: notebooks
-    opendatahub.io/component: "true"
+    app.kubernetes.io/created-by: byon
+    opendatahub.io/dashboard: "true"
     opendatahub.io/notebook-image: "true"
-    platform.opendatahub.io/part-of: workbenches
   annotations:
     opendatahub.io/notebook-image-name: "Fraud Detection Data Science"
-    opendatahub.io/notebook-image-desc: "Data Science workbench with Feast, Model Registry, ONNX Runtime, and s3fs pre-installed"
+    opendatahub.io/notebook-image-desc: "Data Science workbench with Feast, MLflow, Model Registry, ONNX Runtime, and s3fs pre-installed"
     opendatahub.io/notebook-image-url: "https://github.com/mouachan/fraud-detection-ml"
     opendatahub.io/notebook-image-order: "100"
 spec:
@@ -25,7 +21,7 @@ spec:
         opendatahub.io/workbench-image-recommended: "true"
         opendatahub.io/notebook-build-commit: "fraud-detection-custom"
         opendatahub.io/notebook-python-dependencies: >-
-          [{"name":"Feast","version":"0.58"},{"name":"s3fs","version":"2026.2"},{"name":"skl2onnx","version":"1.19"},{"name":"onnxruntime","version":"1.24"},{"name":"model-registry","version":"0.3"},{"name":"scikit-learn","version":"1.7"},{"name":"boto3","version":"1.42"}]
+          [{"name":"Feast","version":"0.58"},{"name":"MLflow","version":"3.6","visible":true},{"name":"s3fs","version":"2026.2"},{"name":"skl2onnx","version":"1.19"},{"name":"onnxruntime","version":"1.24"},{"name":"model-registry","version":"0.3"},{"name":"scikit-learn","version":"1.7"},{"name":"boto3","version":"1.42"}]
         opendatahub.io/notebook-software: >-
           [{"name":"Python","version":"3.12"},{"name":"JupyterLab","version":"4.x"}]
         openshift.io/imported-from: "quay.io/mouachan/fraud-detection-datascience-workbench"

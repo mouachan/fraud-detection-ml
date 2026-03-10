@@ -1,28 +1,36 @@
-# Fraud Detection with Feature Store on OpenShift AI 3.2
+# Fraud Detection with Feature Store & MLflow on OpenShift AI 3.3
 
-A demonstration of **Feature Store** (Feast) on **Red Hat OpenShift AI 3.2** for real-time bank fraud detection.
+A demonstration of **Feature Store** (Feast), **MLflow Experiment Tracking**, and **Model Registry** on **Red Hat OpenShift AI 3.3** for real-time bank fraud detection.
 
 ## Architecture
 
 ```
-                        OpenShift AI 3.2
-    +----------------------------------------------------------+
-    |                                                          |
-    |   +-------------+        +-------------------------+     |
-    |   |  Workbench   |        |  Feature Store          |     |
-    |   |  (Notebook)  |------->|  (Feast Operator)       |     |
-    |   +-------------+        +----------+--------------+     |
-    |                                     |                    |
-    |              +----------------------+----------+         |
-    |              v                      v          v         |
-    |   +-----------------+   +-----------------+  +--------+  |
-    |   | Offline Store   |   | Online Store    |  |   S3   |  |
-    |   | (Parquet/MinIO) |   | (PostgreSQL)    |  | (MinIO)|  |
-    |   |                 |   |                 |  |Registry|  |
-    |   | Batch /         |   | Real-time       |  | + Data |  |
-    |   | Training        |   | Serving         |  |        |  |
-    |   +-----------------+   +-----------------+  +--------+  |
-    +----------------------------------------------------------+
+                         OpenShift AI 3.3
+    +-----------------------------------------------------------+
+    |                                                           |
+    |   +-------------+        +-------------------------+      |
+    |   |  Workbench   |        |  Feature Store (Feast)  |      |
+    |   |  (Notebook)  |------->|  Online + Offline Store |      |
+    |   +------+------+        +-------------------------+      |
+    |          |                                                |
+    |          v                                                |
+    |   +------+------+                                         |
+    |   |   MLflow      |   Experiment Tracking                 |
+    |   |  (Dev Preview)|   Params, Metrics, Artifacts          |
+    |   +------+------+                                         |
+    |          |                                                |
+    |          v                                                |
+    |   +------+------+        +----------------+               |
+    |   | MLflow Model |       | RHOAI Model    |               |
+    |   | Registry     |------>| Registry       |               |
+    |   +------+------+        +-------+--------+               |
+    |          |                       |                         |
+    |          v                       v                         |
+    |   +-------------+        +----------------+               |
+    |   |  S3 (MinIO)  |        | Model Serving  |               |
+    |   |  Artifacts   |        | (KServe/OVMS)  |               |
+    |   +-------------+        +----------------+               |
+    +-----------------------------------------------------------+
 ```
 
 ### Components
@@ -34,6 +42,8 @@ A demonstration of **Feature Store** (Feast) on **Red Hat OpenShift AI 3.2** for
 | **Registry** | S3 / MinIO | Feature metadata catalog (`registry.db`) |
 | **Feature Server** | Feast (RHOAI Operator) | gRPC and REST API to serve features |
 | **UI** | Feast UI (RHOAI) | Web interface to browse features |
+| **MLflow** | MLflow 3.6 (Dev Preview) | Experiment tracking, model registry |
+| **Model Registry** | Kubeflow Model Registry | Model versioning and deployment |
 | **Workbench** | Jupyter Notebook | Experimentation and model training |
 
 ### Why Parquet instead of PostgreSQL for the Offline Store?
@@ -49,12 +59,16 @@ Using `FileSource` (Parquet on S3) is **fully supported**, uses the `BATCH_FILE`
 ## Prerequisites
 
 - OpenShift 4.14+ cluster
-- Red Hat OpenShift AI 3.2 installed
-- Feast Operator enabled in the DataScienceCluster:
+- Red Hat OpenShift AI 3.3 installed
+- Feast Operator and MLflow Operator enabled in the DataScienceCluster:
   ```yaml
   spec:
     components:
       feastoperator:
+        managementState: Managed
+      mlflowoperator:
+        managementState: Managed
+      modelregistry:
         managementState: Managed
   ```
 - `oc` CLI connected to the cluster
@@ -87,7 +101,8 @@ fraud-detection-ml/
 |   +-- features.py                        # Entities, FeatureViews, On-Demand features
 |   +-- permissions.py                     # Feast RBAC permissions
 +-- notebooks/
-    +-- fraud_detection_feature_store_demo.ipynb
+    +-- fraud_detection_feature_store_demo.ipynb  # Feast + Model Serving pipeline
+    +-- fraud_detection_mlflow_pipeline.ipynb     # MLflow experiment tracking pipeline
 ```
 
 ## Deployment
@@ -406,6 +421,79 @@ TLS is **automatically provisioned** by the Feast Operator using OpenShift servi
 
 Clients (workbenches, notebooks) must mount the CA certificate to connect to the Feast servers.
 
+## MLflow (Developer Preview)
+
+MLflow is deployed as a **Developer Preview** feature in RHOAI 3.3 via the `mlflowoperator` component.
+
+### MLflow Server Deployment
+
+Create an MLflow CR to deploy the server:
+
+```yaml
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  serveArtifacts: true
+  artifactsDestination: "s3://mlflow-artifacts/"
+  envFrom:
+    - secretRef:
+        name: mlflow-s3-credentials
+  env:
+    - name: MLFLOW_S3_ENDPOINT_URL
+      value: "http://minio.fraud-detection-ml.svc.cluster.local:9000"
+  storage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
+```
+
+The MLflow CR is **cluster-scoped** -- the deployment is created in `redhat-ods-applications`.
+
+Create the S3 credentials secret in `redhat-ods-applications`:
+
+```bash
+oc create secret generic mlflow-s3-credentials -n redhat-ods-applications \
+  --from-literal=AWS_ACCESS_KEY_ID=minioadmin \
+  --from-literal=AWS_SECRET_ACCESS_KEY=<your-password> \
+  --from-literal=AWS_DEFAULT_REGION=us-east-1
+```
+
+Create the `mlflow-artifacts` bucket in MinIO:
+
+```bash
+oc exec -n fraud-detection-ml deployment/minio -- \
+  mc alias set local http://localhost:9000 minioadmin <your-password> && \
+  mc mb local/mlflow-artifacts --ignore-existing
+```
+
+### MLflow Features
+
+| Feature | Status |
+|---------|--------|
+| Experiment Tracking | Available (Dev Preview) |
+| MLflow Model Registry | Available (Dev Preview) |
+| Autologging (sklearn, etc.) | Available |
+| Artifact Storage (S3/MinIO) | Available |
+| Kubernetes Auth | Available |
+| Workspace Isolation (K8s namespaces) | Available |
+
+### MLflow Pipeline Notebook
+
+The `fraud_detection_mlflow_pipeline.ipynb` notebook demonstrates the full MLflow lifecycle:
+
+| Step | Description |
+|------|-------------|
+| **1. Configure** | Connect to MLflow server with K8s auth + TLS |
+| **2. Train (manual)** | Log params, metrics, confusion matrix, ROC curve, feature importance |
+| **3. Train (autolog)** | Compare RandomForest, GradientBoosting, LogisticRegression |
+| **4. Register** | Register best model in MLflow Model Registry |
+| **5. Promote** | Transition to Production stage, add tags and alias |
+| **6. RHOAI Registry** | Export to ONNX, upload to S3, register in RHOAI Model Registry with full metadata |
+
 ## Using the Notebook
 
 ### From an RHOAI Workbench
@@ -416,22 +504,33 @@ Clients (workbenches, notebooks) must mount the CA certificate to connect to the
 4. Upload the `feature_repo/` folder and the notebook to the workbench
 5. Run the notebook cell by cell
 
-### Notebook Contents
+### Notebooks
 
-The notebook `fraud_detection_feature_store_demo.ipynb` demonstrates the full workflow:
+#### `fraud_detection_feature_store_demo.ipynb` - Feast + Model Serving
+
+Full workflow from feature retrieval to model serving:
 
 | Step | Description |
 |------|-------------|
-| **1. Setup** | Install `feast[postgres]`, `scikit-learn` |
-| **2. Configuration** | Generate `feature_store.yaml` from environment variables |
-| **3. Data** | Generate customer profiles and transaction statistics |
-| **4. Definitions** | Display feature definitions (`features.py`) |
-| **5. feast apply** | Register features in the S3 registry |
-| **6. Materialization** | Load features into PostgreSQL (online store) |
-| **7. Training** | Retrieve historical features via `get_historical_features()` |
-| **8. Model** | Train a RandomForest classifier + evaluation |
-| **9. Inference** | Real-time prediction via `get_online_features()` from PostgreSQL |
-| **10. Architecture** | Summary diagram |
+| **1-3.** | Connect to Feast Feature Store, explore features |
+| **4-5.** | Retrieve historical features, train RandomForest |
+| **6.** | Real-time prediction via online store (PostgreSQL) |
+| **7-8.** | Export to ONNX, upload to MinIO |
+| **9.** | Register in RHOAI Model Registry |
+| **10-11.** | Deploy via KServe/OVMS, end-to-end inference |
+
+#### `fraud_detection_mlflow_pipeline.ipynb` - MLflow Pipeline
+
+Complete MLflow experiment tracking and model lifecycle:
+
+| Step | Description |
+|------|-------------|
+| **1.** | Configure MLflow (K8s auth + TLS) |
+| **2.** | Train with manual tracking (params, metrics, plots) |
+| **3.** | Train with autolog (compare 3 models) |
+| **4.** | Register best model in MLflow Registry |
+| **5.** | Promote to Production (tags, alias) |
+| **6.** | Register in RHOAI Model Registry (ONNX + full metadata) |
 
 ## Feature Definitions
 
@@ -634,9 +733,40 @@ This happens when data sources use `PostgreSQLSource` (contrib), which is serial
 
 Feast 0.58.0 doesn't support the `large_string` Arrow type. Ensure Parquet files are written with `pa.string()` columns. The `08-parquet-data-job.yaml` handles this automatically by casting `large_string` to `string` before writing.
 
+## Custom Workbench Image
+
+The custom workbench image (`quay.io/mouachan/fraud-detection-datascience-workbench:2025.2`) includes all required dependencies:
+
+| Package | Purpose |
+|---------|---------|
+| `feast[postgres]` | Feature Store client |
+| `mlflow` | Experiment tracking |
+| `model-registry` | RHOAI Model Registry client |
+| `skl2onnx` | ONNX export |
+| `onnxruntime` | ONNX inference |
+| `boto3` | S3/MinIO access |
+| `s3fs` | S3 filesystem |
+
+To rebuild and push:
+
+```bash
+cd datascience-custom-image
+podman build --platform linux/amd64 -t quay.io/mouachan/fraud-detection-datascience-workbench:2025.2 .
+podman push quay.io/mouachan/fraud-detection-datascience-workbench:2025.2
+```
+
+Then re-import the ImageStream tag on the cluster:
+
+```bash
+oc import-image fraud-detection-datascience:2025.2 \
+  --from=quay.io/mouachan/fraud-detection-datascience-workbench:2025.2 \
+  -n redhat-ods-applications --confirm
+```
+
 ## References
 
-- [Red Hat OpenShift AI 3.2 - Working with machine learning features](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.2/html/working_with_machine_learning_features/)
+- [Red Hat OpenShift AI 3.3 - Working with machine learning features](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.3/html/working_with_machine_learning_features/)
+- [MLflow on OpenShift AI](https://ai-on-openshift.io/tools-and-applications/mlflow/mlflow/)
 - [Feast documentation](https://docs.feast.dev/)
 - [Feast Operator RBAC with TLS example](https://github.com/feast-dev/feast/tree/master/examples/operator-rbac-openshift-tls)
 - [Feast Operator samples](https://github.com/feast-dev/feast/tree/stable/infra/feast-operator)
