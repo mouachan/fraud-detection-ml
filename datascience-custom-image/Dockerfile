@@ -17,10 +17,12 @@ RUN pip install --no-cache-dir \
     boto3 \
     mlflow
 
+# MLflow plugin: auto-inject X-Mlflow-Workspace header for RHOAI multi-tenant MLflow
+COPY --chown=1001:0 mlflow_rhoai_plugin/ /tmp/mlflow_rhoai_plugin/
+RUN pip install --no-cache-dir /tmp/mlflow_rhoai_plugin/ && rm -rf /tmp/mlflow_rhoai_plugin/
+
 # TLS: trust the cluster CA bundle (injected via trusted-ca-bundle ConfigMap mounted at /etc/pki/ca-trust/extracted/pem)
 # REQUESTS_CA_BUNDLE is used by Python requests/urllib3/mlflow/boto3
 ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
-
-USER 1001
 
 WORKDIR /opt/app-root/src

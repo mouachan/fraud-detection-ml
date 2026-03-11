@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlflow-rhoai-workspace"
+version = "0.1.0"
+description = "MLflow request header plugin for RHOAI workspace context"
+
+[tool.setuptools]
+py-modules = ["mlflow_rhoai_workspace"]
+
+[project.entry-points."mlflow.request_header_provider"]
+rhoai-workspace = "mlflow_rhoai_workspace:RhoaiWorkspaceHeaderProvider"
