@@ -503,11 +503,10 @@ The `fraud_detection_mlflow_pipeline.ipynb` notebook demonstrates the full MLflo
 1. In the OpenShift AI dashboard, go to **Projects** > `fraud-detection-ml`
 2. Create a **Workbench** with the custom image (`Fraud Detection Data Science`)
 3. When creating the workbench, select the `fraud-detection` **Feature Store** in the configuration (this auto-mounts the Feast client config and CA certificate)
-4. Attach the **Data Connection** `minio-data-connection` (injects `AWS_*` env vars)
-5. Mount the **ConfigMap** `mlflow-config` as **environment variables** (injects `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL`)
-6. Mount the **ConfigMap** `trusted-ca-bundle` as a **volume** at `/etc/pki/ca-trust/extracted/pem` (cluster CA for TLS)
-7. Upload the `feature_repo/` folder and the notebook to the workbench
-8. Run the notebook cell by cell
+4. Attach the **Connection** `minio-data-connection` (injects `AWS_*` env vars)
+5. Attach the **Connection** `mlflow-data-connection` (injects `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL`, `MLFLOW_TRACKING_SERVER_CERT_PATH`)
+6. Upload the `feature_repo/` folder and the notebook to the workbench
+7. Run the notebook cell by cell
 
 ### Notebooks
 
@@ -752,7 +751,7 @@ The custom workbench image (`quay.io/mouachan/fraud-detection-datascience-workbe
 | `boto3` | S3/MinIO access |
 | `s3fs` | S3 filesystem |
 
-The image also sets `REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt` so that Python libraries (requests, urllib3, mlflow, boto3) automatically trust the cluster CA certificates injected by the `trusted-ca-bundle` ConfigMap.
+The image also sets `REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt` so that Python libraries (requests, urllib3, boto3) automatically trust the system CA certificates. For MLflow specifically, the `mlflow-data-connection` Connection injects `MLFLOW_TRACKING_SERVER_CERT_PATH` pointing to the service account CA.
 
 To rebuild and push:
 
@@ -772,13 +771,12 @@ oc import-image fraud-detection-datascience:2025.2 \
 
 ### Workbench Environment Configuration
 
-The notebook relies on environment variables injected by Kubernetes resources rather than hardcoded values. Attach these to the workbench:
+The notebook relies on environment variables injected by Kubernetes Connections rather than hardcoded values. Attach these to the workbench:
 
-| Resource | Type | Provides |
-|----------|------|----------|
-| `minio-data-connection` | Data Connection (Secret) | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION` |
-| `mlflow-config` | ConfigMap (env vars) | `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL` |
-| `trusted-ca-bundle` | ConfigMap (volume at `/etc/pki/ca-trust/extracted/pem`) | Cluster CA certificates for TLS |
+| Connection | Type | Provides |
+|------------|------|----------|
+| `minio-data-connection` | S3 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION` |
+| `mlflow-data-connection` | URI | `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL`, `MLFLOW_TRACKING_SERVER_CERT_PATH` |
 
 The service account token (`/var/run/secrets/kubernetes.io/serviceaccount/token`) is auto-mounted by Kubernetes and used for MLflow and Model Registry authentication.
 
