@@ -13,11 +13,6 @@ spec:
       url: {{ .Values.featureStore.gitUrl }}
       ref: {{ .Values.featureStore.gitRef }}
       subPath: {{ .Values.featureStore.subPath }}
-  authz:
-    kubernetes:
-      roles:
-        - feast-writer
-        - feast-reader
   services:
     onlineStore:
       persistence:

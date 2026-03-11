@@ -115,6 +115,7 @@ Before deploying, edit `openshift/01-secrets.yaml` and replace the `<CHANGEZ_MOI
 - `postgres-creds`: PostgreSQL connection for Feast (password must match `postgres-admin`)
 - `minio-admin`: MinIO credentials for the deployment
 - `minio-creds`: S3 credentials for Feast pods (must match `minio-admin`)
+- `minio-data-connection`: Data Connection for the workbench (must match `minio-admin`)
 
 ### 2. Deploy
 
@@ -170,6 +171,7 @@ Configurable parameters (`values.yaml`):
 | `featureStore.gitUrl` | `https://github.com/mouachan/fraud-detection-ml` | Git repo URL |
 | `featureStore.gitRef` | `main` | Git branch |
 | `featureStore.subPath` | `feature_repo` | Sub-directory in the repo |
+| `mlflow.trackingUri` | `https://mlflow.redhat-ods-applications.svc.cluster.local:8443` | MLflow tracking server URI |
 | `feastInit.enabled` | `false` | Enable s3fs workaround Job (see note below) |
 
 After `helm install` completes, run the s3fs workaround script manually:
@@ -499,10 +501,13 @@ The `fraud_detection_mlflow_pipeline.ipynb` notebook demonstrates the full MLflo
 ### From an RHOAI Workbench
 
 1. In the OpenShift AI dashboard, go to **Projects** > `fraud-detection-ml`
-2. Create a **Workbench** with a Jupyter image
+2. Create a **Workbench** with the custom image (`Fraud Detection Data Science`)
 3. When creating the workbench, select the `fraud-detection` **Feature Store** in the configuration (this auto-mounts the Feast client config and CA certificate)
-4. Upload the `feature_repo/` folder and the notebook to the workbench
-5. Run the notebook cell by cell
+4. Attach the **Data Connection** `minio-data-connection` (injects `AWS_*` env vars)
+5. Mount the **ConfigMap** `mlflow-config` as **environment variables** (injects `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL`)
+6. Mount the **ConfigMap** `trusted-ca-bundle` as a **volume** at `/etc/pki/ca-trust/extracted/pem` (cluster CA for TLS)
+7. Upload the `feature_repo/` folder and the notebook to the workbench
+8. Run the notebook cell by cell
 
 ### Notebooks
 
@@ -747,6 +752,8 @@ The custom workbench image (`quay.io/mouachan/fraud-detection-datascience-workbe
 | `boto3` | S3/MinIO access |
 | `s3fs` | S3 filesystem |
 
+The image also sets `REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt` so that Python libraries (requests, urllib3, mlflow, boto3) automatically trust the cluster CA certificates injected by the `trusted-ca-bundle` ConfigMap.
+
 To rebuild and push:
 
 ```bash
@@ -762,6 +769,18 @@ oc import-image fraud-detection-datascience:2025.2 \
   --from=quay.io/mouachan/fraud-detection-datascience-workbench:2025.2 \
   -n redhat-ods-applications --confirm
 ```
+
+### Workbench Environment Configuration
+
+The notebook relies on environment variables injected by Kubernetes resources rather than hardcoded values. Attach these to the workbench:
+
+| Resource | Type | Provides |
+|----------|------|----------|
+| `minio-data-connection` | Data Connection (Secret) | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_ENDPOINT`, `AWS_DEFAULT_REGION` |
+| `mlflow-config` | ConfigMap (env vars) | `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL` |
+| `trusted-ca-bundle` | ConfigMap (volume at `/etc/pki/ca-trust/extracted/pem`) | Cluster CA certificates for TLS |
+
+The service account token (`/var/run/secrets/kubernetes.io/serviceaccount/token`) is auto-mounted by Kubernetes and used for MLflow and Model Registry authentication.
 
 ## References
 

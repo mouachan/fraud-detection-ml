@@ -18,5 +18,8 @@ featureStore:
   gitRef: main
   subPath: feature_repo
 
+mlflow:
+  trackingUri: https://mlflow.redhat-ods-applications.svc.cluster.local:8443
+
 feastInit:
   enabled: false

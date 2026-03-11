@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir \
     boto3 \
     mlflow
 
+# TLS: trust the cluster CA bundle (injected via trusted-ca-bundle ConfigMap mounted at /etc/pki/ca-trust/extracted/pem)
+# REQUESTS_CA_BUNDLE is used by Python requests/urllib3/mlflow/boto3
+ENV REQUESTS_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
+
 USER 1001
 
 WORKDIR /opt/app-root/src
